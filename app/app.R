@@ -1,20 +1,12 @@
-### --- Load packages ---- 
+### ----- Load packages ---- 
 
+library(shiny)
+library(gridlayout)
+library(bslib)
 library(tidyverse)
 library(plotly)
 
-### --- Load data ---- 
-
-# read and format data
-data_measuring <- readxl::read_excel("measuring.xlsx") %>% 
-  mutate(date = mdy(date),
-         out_of_bed_time = str_c('2024-01-01', out_of_bed_time, sep = ' ') %>% ymd_hm, # set to constant day (only to plot the time info)
-         bed_time = str_c('2024-01-01', bed_time, sep = ' ') %>% ymd_hm, # set to constant day (only to plot the time info)
-         across(c(snooze_time, work_sessions, movement_time), as.numeric),
-         work_hours = work_sessions * 2) %>% # convert to hours and change variable
-  select(-work_sessions)
-
-### --- Aggregate data ---- 
+### ---- Functions ---- 
 
 # create function to aggregate data
 aggregate_data <- function(data, var, aggregate) {
@@ -23,11 +15,11 @@ aggregate_data <- function(data, var, aggregate) {
   if (var %in% c("out_of_bed_time", "bed_time")) {
     
     return(data)
-  
+    
   }
   
   else {
-   
+    
     # aggregate data based on different time frames
     data_agg = if (identical(aggregate, "daily")) {
       
@@ -47,7 +39,7 @@ aggregate_data <- function(data, var, aggregate) {
         group_by(year(date), month(date)) %>% 
         summarize(date = max(date),
                   across(c(snooze_time, work_hours, movement_time), \(var) sum(var, na.rm = TRUE))) %>% 
-     
+        
         ungroup
     }
     
@@ -57,10 +49,6 @@ aggregate_data <- function(data, var, aggregate) {
   
 }
 
-# test function
-data_measuring %>% aggregate_data(var = "snooze_time", aggregate = "monthly")
-
-### --- Plot data ---- 
 
 # create function to plot data
 plot_data <- function(data, var, aggregate, smooth) {
@@ -109,8 +97,8 @@ plot_data <- function(data, var, aggregate, smooth) {
       geom_point(col = "grey50") + 
       geom_line(col = "grey50") + 
       geom_hline(yintercept = case_when(identical(aggregate, "daily") ~ 30,
-                                        identical(aggregate, "weekly") ~ 210,
-                                        .default = NA),
+                                         identical(aggregate, "weekly") ~ 210,
+                                         .default = NA),
                  col = "darkgreen") + 
       scale_x_date(date_breaks = ifelse(aggregate %in% c("daily", "weekly"), "1 week", "1 month")) + 
       labs(title = "Snooze time",
@@ -135,7 +123,7 @@ plot_data <- function(data, var, aggregate, smooth) {
            y = "Hours")
     
   } else { # movement_time
-  
+    
     g = data %>% 
       ggplot(aes(x = date,
                  y = movement_time,
@@ -152,7 +140,7 @@ plot_data <- function(data, var, aggregate, smooth) {
            y = "Minutes")
     
   }
-    
+  
   # conditionally add smooth curve
   if(identical(smooth, TRUE)) {
     
@@ -166,23 +154,105 @@ plot_data <- function(data, var, aggregate, smooth) {
   
 }
 
-# test function
-data_measuring %>% 
-  aggregate_data(var = "snooze_time", aggregate = "daily") %>% 
-  plot_data(var = "snooze_time", aggregate = "daily")
+### ---- Define UI ---- 
 
-### --- Simulate app ---- 
+# read and format data
+data_measuring <- readxl::read_excel("measuring.xlsx") %>% 
+  mutate(date = mdy(date),
+         out_of_bed_time = str_c('2024-01-01', out_of_bed_time, sep = ' ') %>% ymd_hm, # set to constant day (only to plot the time info)
+         bed_time = str_c('2024-01-01', bed_time, sep = ' ') %>% ymd_hm, # set to constant day (only to plot the time info)
+         across(c(snooze_time, work_sessions, movement_time), as.numeric),
+         work_hours = work_sessions * 2) %>% # convert to hours and change variable
+  select(-work_sessions)
 
-# input list
-input <- list()
-var <- colnames(data_measuring)[-1]
-aggregate <- c("daily", "weekly", "monthly")
-input$var <- var[5]
-input$aggregate <- aggregate[1]
-input$smooth <- TRUE
+ui <- grid_page(
+  layout = c(
+    "header header",
+    "sidebar  plot"
+  ),
+  row_sizes = c(
+    "100px",
+    "1fr"
+  ),
+  col_sizes = c(
+    "250px",
+    "1fr"
+  ),
+  gap_size = "1rem",
+  grid_card_text(
+    area = "header",
+    content = "Measuring!",
+    alignment = "start",
+    is_title = FALSE
+  ),
+  grid_card(
+    area = "sidebar",
+    card_body(
+      card(
+        full_screen = TRUE,
+        card_header("Settings"),
+        card_body(
+          selectInput(
+            inputId = "var",
+            label = "Select Variable",
+            choices = list(
+              "Out of bed time" = "out_of_bed_time",
+              "Snooze time" = "snooze_time",
+              "Bed time" = "bed_time",
+              "Work hours" = "work_hours",
+              "Movement time" = "movement time"
+            )
+          ),
+          radioButtons(
+            inputId = "aggregate",
+            label = "Aggregate",
+            choices = list(
+              "Daily" = "daily",
+              "Weekly" = "weekly",
+              "Monthly" = "monthly"
+            ),
+            width = "100%"
+          ),
+          checkboxInput(
+            inputId = "smooth",
+            label = "Add smooth curve",
+            value = FALSE,
+            width = "100%"
+          )
+        )
+      )
+    )
+  ),
+  grid_card(
+    area = "plot",
+    card_header("Interactive Plot"),
+    card_body(
+      plotlyOutput(
+        outputId = "plot",
+        width = "100%",
+        height = "100%"
+      )
+    )
+  )
+)
 
-# aggregate data and create plot
-data_measuring %>% 
-  aggregate_data(var = input$var, aggregate = input$aggregate) %>% 
-  plot_data(var = input$var, aggregate = input$aggregate, smooth = input$smooth)
+### ---- Define server ---- 
 
+server <- function(input, output) {
+  
+  
+  output$plot <- renderPlotly({
+  
+    # aggregate data and create plot
+    data_measuring %>% 
+      aggregate_data(var = input$var, aggregate = input$aggregate) %>% 
+      plot_data(var = input$var, aggregate = input$aggregate, smooth = input$smooth)
+    
+  })
+
+}
+
+### ---- Run app ---- 
+
+shinyApp(ui, server)
+  
